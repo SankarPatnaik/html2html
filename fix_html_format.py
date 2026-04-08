@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
-PARA_MARKER_RE = re.compile(r"(?<!\d)(\d{1,3})\.\s+")
+PARA_MARKER_RE = re.compile(r"(?<![\w-])(\d{1,3})\.\s+")
 P_TAG_RE = re.compile(r"<p\b([^>]*)>(.*?)</p>", re.IGNORECASE | re.DOTALL)
 
 
@@ -53,10 +53,34 @@ def seems_paragraph_heading(text: str) -> bool:
     if len(words) < 4:
         return False
     alpha_words = [w for w in words if re.search(r"[A-Za-z]", w)]
+    if looks_like_document_header(plain, alpha_words):
+        return False
     title_case_ratio = sum(w[:1].isupper() for w in alpha_words) / max(len(alpha_words), 1)
     has_sentence_punctuation = any(ch in plain for ch in [":", ",", ";", "?"])
     all_caps = plain.upper() == plain
     return (not all_caps) and (title_case_ratio < 0.95) and has_sentence_punctuation
+
+
+def looks_like_document_header(plain: str, alpha_words: List[str]) -> bool:
+    """Guardrail: avoid converting case-title heading blocks into body paragraphs."""
+    upper = plain.upper()
+    header_markers = [
+        "REPORTABLE",
+        "IN THE SUPREME COURT",
+        "APPELLATE JURISDICTION",
+        "APPEAL NO.",
+        "VERSUS",
+        "J U D G M E N T",
+    ]
+    if any(marker in upper for marker in header_markers):
+        return True
+
+    if alpha_words:
+        fully_upper = sum(w.isupper() for w in alpha_words)
+        if fully_upper / len(alpha_words) > 0.65:
+            return True
+
+    return False
 
 
 def replace_escaped_newlines(html: str, stats: FixStats) -> str:
@@ -123,6 +147,8 @@ def split_numbered_paragraphs_in_text(text: str) -> List[str]:
     plain = normalize_ws(strip_tags(text))
     matches = list(PARA_MARKER_RE.finditer(plain))
     if len(matches) < 2:
+        return [plain]
+    if matches[0].start() > 80:
         return [plain]
 
     chunks: List[str] = []
